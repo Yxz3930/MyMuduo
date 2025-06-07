@@ -1,0 +1,61 @@
+<link rel="icon" href="data:;base64,iVBORw0KGgo=">
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+</head>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Welcome Page</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f0f8ff;
+            color: #333;
+            text-align: center;
+            padding: 50px;
+        }
+        h1 {
+            color: #4CAF50;
+        }
+        p {
+            font-size: 18px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+    </style>
+</head>
+<body>
+
+    <img src="welcom.jpg" alt="Welcome Image">
+    <h1>Welcome to my webpage!</h1>
+    <p>writen by yxz;</p>
+    <p>This is a simple HTML page, displayed on the web. Welcome to browse!</p>
+    
+    <button onclick="displayMessage()">click me!</button>
+
+    <p id="message" style="display:none; color: #007BFF; font-size: 20px;"></p>
+
+    <script>
+        function displayMessage() {
+            var message = document.getElementById("message");
+            message.style.display = "block";
+            message.textContent = "click button";
+        }
+    </script>
+
+</body>
+</html>

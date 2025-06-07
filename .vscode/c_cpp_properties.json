@@ -1,0 +1,27 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "compileCommands": [
+                "${workspaceFolder}/build/compile_commands.json"
+            ],
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/net/include",
+                "${workspaceFolder}/common",
+                // "${workspaceFolder}/http",
+                "${workspaceFolder}/chatRoom",
+                "${workspaceFolder}/timer",
+                "${workspaceFolder}/logger"
+            ],
+            
+            "defines": [],
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "c17",
+            "cppStandard": "gnu++17",
+            "intelliSenseMode": "linux-gcc-x64"
+
+        }
+    ],
+    "version": 4
+}
