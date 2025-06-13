@@ -4,11 +4,14 @@
 #include "TimeStamp.h"
 #include "TcpConnection.h"
 #include "EventLoop.h"
+#include "AsyncLogging.h"
+#include "Buffer.h"
 
 #include <functional>
 #include <string>
 #include <thread>
 #include <mutex>
+#include <climits>
 
 std::mutex coutMtx;
 
@@ -73,10 +76,10 @@ private:
     }
 
     // 可读写事件回调
-    void onMessage(const TcpConnectionPtr &conn, std::string buf, TimeStamp time)
+    void onMessage(const TcpConnectionPtr &conn, Buffer* buf, TimeStamp time)
     {
         std::lock_guard<std::mutex> lock(coutMtx);
-        std::cout << "[From Server] " << buf << "\n";
+        std::cout << "[From Server] " << buf->retrieveAllAsString() << "\n";
         std::cout << "client input (/quit exits): " << std::flush;  // 再次提示输入
         // conn->shutdown();   // 关闭写端 底层响应EPOLLHUP => 执行closeCallback_
     }
@@ -87,7 +90,13 @@ private:
 
 int main()
 {
-    Logger::GetInstance().setLogLevel(LogLevel::ERROR);
+    // 异步日志设置
+    AsyncLogging async_log("../logs/client", INT_MAX, 3, 4096);
+    Logger::SetWritFunc([&](const char *msg, int len)
+                        { async_log.append(msg, len); });
+    Logger::SetFlushFunc([&]()
+                         { async_log.flush(); });
+    LoggerControl::getInstance().setLoggerLevel(LogLevel::INFO);
 
     EventLoop loop;
     InetAddr serverAddr("127.0.0.1", 9999);

@@ -40,6 +40,8 @@ public:
     /// @param channel
     void removeChannel(Channel *channel) override;
 
+    size_t getMapSize() override;
+
 private:
     /// @brief ·â×°µ×²ãµÄepoll_ctl
     /// @param operation

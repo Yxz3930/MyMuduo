@@ -7,6 +7,7 @@
 #include "TcpConnection.h"
 #include "Socket.h"
 #include <string>
+#include "SmartPointer.h"
 
 class TcpClient
 {
@@ -53,7 +54,7 @@ private:
     const InetAddr m_serverAddr;
     const std::string m_clientName;
 
-    std::unique_ptr<Socket> m_clientSocket;   // 这个fd就是通信用的fd 在创建TcpConnection时需要传入这个fd
+    std::unique_ptr<Socket, PoolDeleter<Socket>> m_clientSocket;   // 这个fd就是通信用的fd 在创建TcpConnection时需要传入这个fd
     // std::unique_ptr<Channel> m_clientChannel; // 这个客户端fd对应的channel不需要设置 因为客户端的fd本身就是用于通信的 在TcpConnection当中存在这么一个Channel
     TcpConnectionPtr m_connPtr;               // 用于通信 需要make_shared创建 这里用于增加引用计数使其不自动释放
 

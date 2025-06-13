@@ -69,7 +69,7 @@ private:
 
 int main()
 {
-    Logger::GetInstance().setLogLevel(LogLevel::ERROR);
+    LoggerControl::getInstance().setLoggerLevel(LogLevel::INFO);
 
     InetAddr serverAddr("127.0.0.1", 9999);
     EchoClinet echoClient(serverAddr, "EchoClinetBlocking");

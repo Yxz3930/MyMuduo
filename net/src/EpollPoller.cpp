@@ -21,7 +21,7 @@ EpollPoller::~EpollPoller()
 
 TimeStamp EpollPoller::wait(ChannelVector *activeChannel)
 {
-    LOG_INFO("epoll wait...");
+    LOG_INFO << "epoll wait...";
 
     // 使用vector容器替代原本的epoll_event[]数组 方法是对迭代器取*得到vector首元素,然后再取地址
     // 这里每次epoll_wait写入时都是从begin的首地址元素开始写入
@@ -30,7 +30,7 @@ TimeStamp EpollPoller::wait(ChannelVector *activeChannel)
 
     if (eventsNums > 0)
     {
-        LOG_INFO(std::to_string(eventsNums) + " events happend");
+        LOG_INFO << eventsNums << " events happend";
         this->pushActiveChannelVector(eventsNums, activeChannel);
         if (eventsNums == this->m_eventsVec.size()) // 保存epoll_event的vevtor容器进行扩容
         {
@@ -40,7 +40,7 @@ TimeStamp EpollPoller::wait(ChannelVector *activeChannel)
     }
     else if (eventsNums == 0)
     {
-        LOG_ERROR("eventNums = 0");
+        LOG_ERROR << "eventNums = 0";
     }
     else
     {
@@ -52,8 +52,8 @@ TimeStamp EpollPoller::wait(ChannelVector *activeChannel)
 void EpollPoller::updateChannel(Channel *channel)
 {
     int curState = channel->state();
-    LOG_INFO("EpollPoller::updateChannel channel ptr: " + ptrToString(channel));
-    LOG_INFO("EpollPoller::updateChannel channel fd: " + std::to_string(channel->fd()) + ", curState " + std::to_string(curState));
+    LOG_INFO << "EpollPoller::updateChannel channel ptr: " << ptrToString(channel);
+    LOG_INFO << "EpollPoller::updateChannel channel fd: " << channel->fd() << ", curState " << curState;
 
     if (curState == EpollPoller::s_new || curState == EpollPoller::s_delete)
     {
@@ -92,13 +92,22 @@ void EpollPoller::removeChannel(Channel *channel)
     // 这里的移除channel就是从channelMap中将channel删除掉了 但是仍然没有将channel对象析构
     int fd = channel->fd();
     this->m_channelMap.erase(fd);
-
-    LOG_INFO("fd " + std::to_string(fd) + " is erased from channelMap");
+    LOG_INFO << "fd " << fd << " is erased from channelMap";
 
     int curState = channel->state();
     if (curState == EpollPoller::s_add)
+    {
+        LOG_INFO << "EpollPoller::removeChannel EPOLL_CTL_DEL pair_1";
         this->control(EPOLL_CTL_DEL, channel);
+    }
+    LOG_INFO << "channel state: " << curState;
+    LOG_INFO << "EpollPoller::removeChannel EPOLL_CTL_DEL pair_2";
     channel->setState(EpollPoller::s_new);
+}
+
+size_t EpollPoller::getMapSize()
+{
+    return this->m_channelMap.size();
 }
 
 void EpollPoller::control(int operation, Channel *channel)
@@ -106,18 +115,18 @@ void EpollPoller::control(int operation, Channel *channel)
     epoll_event event;
     ::memset(&event, 0, sizeof(event));
 
-    event.data.ptr = static_cast<void*>(channel);
+    event.data.ptr = static_cast<void *>(channel);
     event.events = channel->events();
 
     int ret = ::epoll_ctl(this->m_epfd, operation, channel->fd(), &event);
     if (ret < 0)
     {
         if (operation == EPOLL_CTL_ADD)
-            LOG_ERROR("epoll_ctl add error");
+            LOG_ERROR << "epoll_ctl add error";
         if (operation == EPOLL_CTL_MOD)
-            LOG_ERROR("epoll_ctl mod error");
+            LOG_ERROR << "epoll_ctl mod error";
         if (operation == EPOLL_CTL_DEL)
-            LOG_ERROR("epoll_ctl del error");
+            LOG_ERROR << "epoll_ctl del error";
     }
 }
 
@@ -127,13 +136,22 @@ void EpollPoller::pushActiveChannelVector(int eventNums, ChannelVector *activeCh
     {
         // 将epoll_event数据中的ptr转为Channel*进行保存
         Channel *channel = static_cast<Channel *>(this->m_eventsVec[i].data.ptr);
+        LOG_INFO << "Channel ptr: " << channel
+                 << ", fd=" << (channel ? channel->fd() : -1);
+        /**
+         * ??? TcpConnection已经删除了但是却遇到channel仍在执行遭遇空回调的问题
+         * channel和TcpConnection是一对一的关系，但是TcpConnection删除之后，channel可能本身已经触发了，导致在这个获取的事件当中得到了已经删除的连接对应的channel
+         * 注意 这里获取的Channel可能本身已经从epoll对应的map中删除掉了，只不过在删除之前事件已经触发，epoll_wait将这个已经无效的事件也接收了过来
+         * 所以这里需要对获取的channel进行检测 如果channel仍在epoll对应的map中则还仍然有效 否则不添加这个channel
+         */
 
-        LOG_INFO("EpollPoller::pushActiveChannelVector channel ptr: " + ptrToString(channel));
-        LOG_INFO("EpollPoller::pushActiveChannelVector channel fd: " + std::to_string(channel->fd()));
-
-        // 将epoll实际检测到的事件类型写入到channel中
-        channel->setRealEvents(this->m_eventsVec[i].events);
-        // 将channel填入到m_activeChannelVec 容器当中进行存储
-        activeChannel->push_back(channel);
+        if (this->hasChannel(channel))
+        {
+            LOG_INFO << "EpollPoller::pushActiveChannelVector channel exists";
+            channel->setRealEvents(this->m_eventsVec[i].events);
+            activeChannel->push_back(channel);
+        }
+        else
+            LOG_INFO << "EpollPoller::pushActiveChannelVector channel not exists, but epoll_wait gets it";
     }
 }

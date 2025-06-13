@@ -42,6 +42,8 @@ public:
     virtual TimeStamp wait(ChannelVector* activeChannel) = 0;
     virtual void updateChannel(Channel* channel) = 0;
     virtual void removeChannel(Channel* channel) = 0;
+    virtual size_t getMapSize() = 0;
+
 
     /// @brief 判断传入的参数中是否存在这么一个通道
     /// @param channel 

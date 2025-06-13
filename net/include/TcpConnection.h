@@ -8,6 +8,9 @@
 #include "InetAddress.h"
 #include "Callbacks.h"
 #include "TimeStamp.h"
+#include "Buffer.h"
+#include "SmartPointer.h"
+
 
 class Channel;
 class EventLoop;
@@ -47,6 +50,9 @@ public:
     std::string getServerIpPort() { return this->m_serverAddr.getIpPort(); }
     std::string getClientIpPort() { return this->m_clientAddr.getIpPort(); }
 
+    /// @brief 设置读时间、写事件、关闭回调
+    void setCallbacks();
+
     /// @brief 判断是否已经建立了连接
     /// @return
     bool isConnected() { return this->m_state == ConnectionState::Connected; }
@@ -54,6 +60,8 @@ public:
     /// @brief 发送数据
     /// @param data 数据
     void send(const std::string &data);
+
+    void send(Buffer* buf);
 
     /// @brief 发送大型文件
     /// @param fileDescriptor 文件的描述符
@@ -91,7 +99,6 @@ public:
     {
         this->m_closeCallback = std::move(cb);
     }
-
 
 private:
     void setState(ConnectionState state) { this->m_state = state; }
@@ -135,9 +142,10 @@ private:
     const InetAddr m_clientAddr;
 
     EventLoop *m_loop;
-    int m_cfd;                             // 通信文件描述符 由外部传入(Accepter获取得到的)
-    std::unique_ptr<Socket> m_socketCfd;   // cfd对应的socket
-    std::unique_ptr<Channel> m_channelCfd; // 对cfd和对应事件的封装channel
+    // std::unique_ptr<Socket> m_socketCfd;   // cfd对应的socket
+    // std::unique_ptr<Channel> m_channelCfd; // 对cfd和对应事件的封装channel
+    std::unique_ptr<Socket, PoolDeleter<Socket>> m_socketCfd;   // cfd对应的socket
+    std::unique_ptr<Channel, PoolDeleter<Channel>> m_channelCfd; // 对cfd和对应事件的封装channel
     ConnectionState m_state;               // 连接的状态
 
     // 回调函数
@@ -146,11 +154,16 @@ private:
     WriteCompleteCallback m_writeCompleteCallback; // 写完成回调 服务器端将数据发送完成之后需要做什么
     CloseCallback m_closeCallback;                 // 关闭连接回调
 
-    // 接收和发送缓冲区 这里使用std::string来代替
-    std::string m_recvBuffer;
-    std::string m_sendBuffer;
-    size_t m_sendOffset = 0; // 用于记录m_sendBuffer继续发送的索引地址 表示的是下一步需要从offset索引位置继续发送
-                             // 比如0时表示需要从索引0开始发送 10时表示需要从索引10开始发送
+    // 接收和发送缓冲区 使用string的话性能会非常慢 不推荐
+    Buffer m_recvBuffer;
+    Buffer m_sendBuffer;
+    // std::string m_recvBuffer;
+    // std::string m_sendBuffer;
+    // size_t m_sendOffset = 0; // 用于记录m_sendBuffer继续发送的索引地址 表示的是下一步需要从offset索引位置继续发送
+    //                          // 比如0时表示需要从索引0开始发送 10时表示需要从索引10开始发送
 };
 
 #endif // TCP_CONNECTION_H
+
+
+

@@ -17,7 +17,7 @@ int Socket::createSocketFd()
 {
     int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if(fd < 0)
-        LOG_ERROR("lfd < 0, get socket error");
+        LOG_ERROR << "lfd < 0, get socket error";
     this->m_fd = fd;
     return 0;
 }
@@ -35,7 +35,7 @@ int Socket::bind(InetAddr *addr)
     sockaddr_in sock_addr = addr->toSocketAddr();
     int ret = ::bind(this->m_fd, (sockaddr*)&sock_addr, sizeof(sock_addr));
     if(ret < 0)
-        LOG_ERROR("ret < 0, bind error");
+        LOG_ERROR << "ret < 0, bind error";
     return ret;
 }
 
@@ -43,7 +43,7 @@ int Socket::listen()
 {
     int ret = ::listen(this->m_fd, SOMAXCONN);
     if(ret < 0)
-        LOG_ERROR("ret < 0, listen error");
+        LOG_ERROR << "ret < 0, listen error";
     return ret;
 }
 
@@ -53,7 +53,7 @@ int Socket::accept(InetAddr *clientAddr)
     socklen_t client_addr_len = sizeof(client_addr);
     int cfd = ::accept(this->m_fd, (sockaddr*)&client_addr, &client_addr_len);
     if(cfd < 0)
-        LOG_ERROR("cfd < 0, Accept error");
+        LOG_ERROR << "cfd < 0, Accept error";
     else
         clientAddr->setSockAddr(client_addr);
     return cfd;
@@ -65,7 +65,7 @@ InetAddr Socket::accept()
     socklen_t client_addr_len = sizeof(client_addr);
     int cfd = ::accept(this->m_fd, (sockaddr*)&client_addr, &client_addr_len);
     if(cfd < 0)
-        LOG_ERROR("cfd < 0, Accept error");
+        LOG_ERROR << "cfd < 0, Accept error";
     this->m_fd = cfd;
 
     // 转换为可以直接获取地址和端口的形式
@@ -81,7 +81,7 @@ std::pair<int, InetAddr> Socket::accept(int para)
     socklen_t client_addr_len = sizeof(client_addr);
     int cfd = ::accept(this->m_fd, (sockaddr*)&client_addr, &client_addr_len);
     if(cfd < 0)
-        LOG_ERROR("cfd < 0, Accept error");
+        LOG_ERROR << "cfd < 0, Accept error";
 
     // 转换为可以直接获取地址和端口的形式
     InetAddr inetAddr_client(client_addr);
@@ -103,7 +103,7 @@ void Socket::shutdownWrite()
 {
     int ret = ::shutdown(this->m_fd, SHUT_WR);
     if(ret < 0)
-        LOG_ERROR("ret < 0, ShutdownWrite error");
+        LOG_ERROR << "ret < 0, ShutdownWrite error";
 }
 
 

@@ -4,6 +4,7 @@
 #include <memory>
 #include <functional>
 #include <string>
+#include "Buffer.h"
 
 class TimeStamp;
 class TcpConnection;
@@ -13,7 +14,8 @@ using TcpConnectionPtr = std::shared_ptr<TcpConnection>;
 // 连接回调
 using ConnectionCallback = std::function<void(const TcpConnectionPtr &)>;
 // 消息回调
-using MessageCallback = std::function<void(const TcpConnectionPtr &, std::string, TimeStamp)>;
+// using MessageCallback = std::function<void(const TcpConnectionPtr &, std::string, TimeStamp)>;
+using MessageCallback = std::function<void(const TcpConnectionPtr &, Buffer*, TimeStamp)>;
 // 关闭操作回调
 using CloseCallback = std::function<void(const TcpConnectionPtr &)>;
 // 

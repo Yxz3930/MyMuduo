@@ -1,269 +1,120 @@
-#include "Logger.h"
-#include "TimeStamp.h"
-#include <sstream>
 #include <iostream>
+#include "Logger.h"
 #include <iomanip>
-#include <string.h>
+#include <climits>
+#include <fmt/core.h>
 
-std::string Formatter::format(LogLevel level, const std::string &msg, const char *_file_, int _line_)
+// 静态成员 类内声明 类外定义
+std::function<void(const char *, int)> Logger::m_write_cb = nullptr;
+std::function<void()> Logger::m_flush_cb = nullptr;
+// LogFile Logger::m_logfile("../logs", INT_MAX, 1, 1024); // 只要生成文件 那么这里就会在main函数开始前就初始化一个日志文件
+
+
+Logger::Formatter::Formatter(LogLevel level, const char *file, int line)
+    : m_level(level), m_file(file), m_line(line)
 {
-    const std::string s_level = LogLeveltoString(level);
-    std::ostringstream oss;
-
-    std::time_t time = std::chrono::system_clock::to_time_t(TimeStamp().GetTimePoint());
-    std::tm tm;
-
-#ifdef _WIN32
-    localtime_s(&tm, &time); // Windows线程安全版本
-#else
-    localtime_r(&time, &tm); // POSIX线程安全版本
-#endif
-
-    // 获取文件名 而不是全部的地址路径
-    std::string file(_file_);
-    ssize_t pos = file.find_last_of("/");
-    file = file.substr(pos + 1);
-    std::string file_info = std::string(" [" + std::string(file) + ":" + std::to_string(_line_) + "]");
-
-    oss << "[" << std::put_time(&tm, "%Y-%m-%d %H:%M:%S") << "]"
-        << " [" << s_level << "]" << "\t"
-        << std::setw(25) << std::left << file_info
-        // << " threadId: " << std::this_thread::get_id() << "\t"
-        << " msg: " << msg;
-
-    return oss.str();
 }
 
-std::string Formatter::formattime()
+std::string Logger::Formatter::MsgtoFormat(const char *msg)
 {
-    std::ostringstream oss;
+    std::string filename = this->GetCodeFileName();
+    auto now = std::chrono::system_clock::now();
+    time_t time = std::chrono::system_clock::to_time_t(now);
+    struct tm tm;
+    localtime_r(&time, &tm);
 
-    std::time_t time = std::chrono::system_clock::to_time_t(TimeStamp().GetTimePoint());
-    std::tm tm;
+    // 这里使用ostringstream很慢 而且是每次写入日志都会进行格式化 这里会带来非常大的时间损耗
+    // std::ostringstream oss;
+    // std::string level_str = this->LeveltoStr(this->m_level);
+    // std::string filename_line = std::string(" [") + filename + ":" + std::to_string(this->m_line) + "]";
+    // oss << "[" << std::put_time(::localtime(&time), "%Y-%m-%d %H:%M:%S") << "] "
+    //     << "[" << level_str << "]" << "\t"
+    //     << std::setw(20) << std::left << filename_line << "\t"
+    //     << "msg: " << msg << "\n";
+    // return oss.str();
 
-#ifdef _WIN32
-    localtime_s(&tm, &time); // Windows线程安全版本
-#else
-    localtime_r(&time, &tm); // POSIX线程安全版本
-#endif
-
-    oss << std::put_time(&tm, "%Y-%m-%d_%H-%M-%S");
-
-    return oss.str();
+    return fmt::format("[{:04}-{:02}-{:02} {:02}:{:02}:{:02}] [{}]\t[{}:{}]\tmsg: {}\n",
+        tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+        tm.tm_hour, tm.tm_min, tm.tm_sec,
+        this->LeveltoStr(this->m_level),
+        this->GetCodeFileName(), this->m_line,
+        msg);
 }
 
-const std::string Formatter::LogLeveltoString(LogLevel level)
+std::string Logger::Formatter::GetCodeFileName()
+{
+    ssize_t pos = this->m_file.find_last_of("/");
+    return this->m_file.substr(pos + 1);
+}
+
+std::string Logger::Formatter::LeveltoStr(LogLevel level)
 {
     switch (level)
     {
-    case DEBUG:
+    case LogLevel::DEBUG:
         return "DEBUG";
-    case INFO:
+    case LogLevel::INFO:
         return "INFO";
-    case WARNING:
+    case LogLevel::WARNING:
         return "WARNING";
-    case ERROR:
+    case LogLevel::ERROR:
         return "ERROR";
-    case FATAL:
+    case LogLevel::FATAL:
         return "FATAL";
-    default:
-        return "UNKNOWN";
     }
+    return "UNKNOWN";
 }
 
-const std::string Formatter::GetColor(LogLevel level)
+Logger::Logger(LogLevel level, const char *__file__, int __line__)
+    : m_formatter(level, __file__, __line__)
 {
-    switch (level)
+}
+
+Logger::~Logger()
+{
+    // 日志级别过滤
+    if (this->m_formatter.m_level < LoggerControl::getInstance().getLevel())
     {
-    case DEBUG:
-        return "\033[37m"; // 白色
-    case INFO:
-        return "\033[32m"; // 绿色
-    case WARNING:
-        return "\033[33m"; // 黄色
-    case ERROR:
-        return "\033[31m"; // 红色
-    default:
-        return "\033[0m"; // 默认
-    }
-}
-
-void ConsoleAppender::write(LogLevel level, const std::string &msg, const char *_file_, int _line_)
-{
-    std::lock_guard<std::mutex> lock(this->m_cout_mutex);
-    std::cout << Formatter::format(level, msg, _file_, _line_) << std::endl;
-}
-
-void ConsoleAppender::flush()
-{
-    std::cout << std::flush;
-}
-
-FileAppender::FileAppender(std::string logdir)
-    : m_logdir(logdir), buffer_num(1000)
-{
-    this->OpenNewFile();
-}
-
-FileAppender::~FileAppender()
-{
-    // this->WritefromDeque();
-    if (this->m_ofs.is_open())
-        this->m_ofs.close();
-}
-
-void FileAppender::write(LogLevel level, const std::string &msg, const char *_file_, int _line_)
-{
-    // 写入之前检查当前文件路径是否正确
-    this->CheckFilePath();
-    {
-        std::lock_guard<std::mutex> lock(this->m_ofs_mutex);
-        if (this->m_ofs.is_open())
-            this->buffer_deque.push_back(std::move(Formatter::format(level, msg, _file_, _line_)));
-        else
-            std::cout << "FileAppender::write file is not open" << std::endl;
-
-        if (this->buffer_deque.size() > this->buffer_num)
-        {
-            this->WritefromDeque();
-        }
-
-        if (level == LogLevel::FATAL)
-        {
-            this->WritefromDeque();
-            abort();
-        }
-    }
-}
-
-void FileAppender::asyncWrite(std::vector<std::string> *buffer_ptr)
-{
-    if (buffer_ptr->empty())
+        // 当前这个日志级别的日志不需要输出 将缓冲区中的消息删除掉
+        this->m_logstream.clear();
         return;
-    // 写入之前检查当前文件路径是否正确
-    this->CheckFilePath();
-    {
-        std::lock_guard<std::mutex> lock(this->m_ofs_mutex);
-        if (this->m_ofs.is_open())
-        {
-            for (const auto &log_str : *buffer_ptr)
-            {
-                this->m_ofs << log_str << std::endl;
-            }
-        }
-        this->flush();
     }
-}
-
-void FileAppender::flush()
-{
-    this->m_ofs.flush();
-}
-
-void FileAppender::ResetLogdir(const std::string &logdir)
-{
-    this->m_logdir = logdir;
-}
-
-void FileAppender::close()
-{
-    if (this->m_ofs.is_open())
-        this->m_ofs.close();
-}
-
-void FileAppender::CheckFilePath()
-{
-    // 通过日志文件名称的时间和当前
-    // 获取当前时间的各部分
-    std::string time = Formatter::formattime();
-    ssize_t pos = time.find(" ");
-    std::string time_ymd_now = time.substr(0, pos);  // 获取年月日部分
-    std::string time_hms_now = time.substr(pos + 1); // 获取时分秒部分
-
-    // 获取当前文件路径中时间的各部分
-    ssize_t pos_start = this->m_file_path.find_last_of("/");
-    ssize_t pos_mid = this->m_file_path.find_last_of(" ");
-    ssize_t pos_end = this->m_file_path.find_last_of(".");
-    std::string time_ymd_file = this->m_file_path.substr(pos_start + 1, time_ymd_now.size());
-    std::string time_hms_file = this->m_file_path.substr(pos_mid + 1, time_hms_now.size());
-
-    // 如果日期(年月日部分)发生变化 则重新创建一个日志文件
-    if (time_ymd_now != time_ymd_file)
-    {
-        // std::cout << time_ymd_file << std::endl;
-        // std::cout << time_ymd_now << std::endl;
-        // std::cout << "not equal" << std::endl;
-        this->OpenNewFile();
-    }
-}
-
-void FileAppender::OpenNewFile()
-{
-    // 如果原来的文件还在打开则关闭
-    if (this->m_ofs.is_open())
-        this->m_ofs.close();
-
-    std::string time = Formatter::formattime();
-    this->m_file_path = this->m_logdir + "/" + time + ".log";
-
-    this->m_ofs.open(this->m_file_path, std::ios::app);
-    if (!this->m_ofs.is_open())
-    {
-        std::cerr << "open file error: " << strerror(errno) << std::endl;
-    }
-}
-
-void FileAppender::WritefromDeque()
-{
-    while (!this->buffer_deque.empty())
-    {
-        std::string str_log = this->buffer_deque.front();
-        this->m_ofs << str_log << std::endl;
-        this->buffer_deque.pop_front();
-    }
-    this->flush();
-}
-
-void Logger::AddAppender(std::shared_ptr<BasicAppender> appender)
-{
-    this->m_appenders.push_back(appender);
-}
-
-void Logger::log(LogLevel level, const std::string &msg, const char *_file_, int _line_)
-{
-    // 过滤袋小于该级别的日志信息
-    if (level < this->m_level)
-        return;
-
-    if (this->async_writeFunc)
-    {
-        this->async_writeFunc(level, msg, _file_, _line_);
-    }
+    std::string msg = this->m_logstream.str();
+    std::string msg_format = this->m_formatter.MsgtoFormat(msg.c_str());
+    if(this->m_write_cb)
+        this->m_write_cb(msg_format.c_str(), msg_format.size());
     else
+        this->DefaultWriteFunc(msg_format.c_str(), msg_format.size());
+
+    if (this->m_formatter.m_level == LogLevel::FATAL)
     {
-        for (const auto &appender : this->m_appenders)
-        {
-            std::lock_guard<std::mutex> lock(this->m_appender_mutex);
-            appender->write(level, msg, _file_, _line_);
-            // appender->flush();
-        }
+        if(this->m_flush_cb)
+            this->m_flush_cb();
+        else
+            this->DefaultFlushFunc();
+        std::cout << "Logger::~Logger encounter FATAL LEVEL msg" << std::endl;
+        std::abort();
     }
 }
 
-void Logger::FlushTask()
+void Logger::SetWritFunc(std::function<void(const char *msg, int len)> cb)
 {
-    while (this->m_running)
-    {
-        for (const auto &appender : this->m_appenders)
-        {
-            std::lock_guard<std::mutex> lock(this->m_appender_mutex);
-            appender->flush();
-        }
-        std::this_thread::sleep_for(std::chrono::seconds(this->m_flush_interval));
-    }
+    Logger::m_write_cb = std::move(cb);
 }
 
-void Logger::SetWriteFunc(const std::function<void(LogLevel, const std::string &, const char *, int)> &cb)
+void Logger::SetFlushFunc(std::function<void(void)> cb)
 {
-    this->async_writeFunc = cb;
+    Logger::m_flush_cb = std::move(cb);
+}
+
+void Logger::DefaultWriteFunc(const char *data, int len)
+{
+    // Logger::m_logfile.append(data, len); // 输出到文件
+    fwrite(data, 1, len, stdout);      // 输出到终端
+}
+
+void Logger::DefaultFlushFunc()
+{
+    // Logger::m_logfile.flush();              // 文件刷新缓冲区
+    std::cout << std::flush << std::endl; // 终端刷新缓冲区
 }

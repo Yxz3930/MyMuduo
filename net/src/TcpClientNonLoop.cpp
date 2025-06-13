@@ -5,7 +5,8 @@
 
 TcpClientNonLoop::TcpClientNonLoop(const InetAddr &serverAddr, const std::string &clientName)
     : m_serverAddr(serverAddr), m_clientName(clientName),
-      m_clientSocket(new Socket(creadClientFd()))
+    //   m_clientSocket(new Socket(creadClientFd())),
+      m_clientSocket(make_unique_from_pool<Socket>(creadClientFd()))
 {
 }
 

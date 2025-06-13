@@ -11,11 +11,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 project(MyMuduo)
 
 # 设置编译类型为 Debug
-set(CMAKE_BUILD_TYPE Debug)
+# set(CMAKE_BUILD_TYPE Debug)
+set(CMAKE_BUILD_TYPE Release)
 
 # 添加下一级的文件夹 注意是文件夹名称
 add_subdirectory(${CMAKE_SOURCE_DIR}/common)
-# add_subdirectory(${CMAKE_SOURCE_DIR}/http)
+add_subdirectory(${CMAKE_SOURCE_DIR}/http)
 add_subdirectory(${CMAKE_SOURCE_DIR}/net)
 add_subdirectory(${CMAKE_SOURCE_DIR}/timer)
 add_subdirectory(${CMAKE_SOURCE_DIR}/logger)
@@ -30,3 +31,7 @@ target_link_libraries(EchoClient NetLib CommonLib LoggerLib TimerLib)
 
 add_executable(EchoClientNonLoop testClientNonLoop.cpp)
 target_link_libraries(EchoClientNonLoop NetLib CommonLib LoggerLib TimerLib)
+
+add_executable(HttpServer HttpServer.cpp)
+target_link_libraries(HttpServer NetLib CommonLib LoggerLib TimerLib HttpLib MemoryPoolLib)
+target_compile_options(HttpServer PRIVATE -O2)

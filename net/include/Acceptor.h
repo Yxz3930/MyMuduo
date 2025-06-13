@@ -9,6 +9,7 @@
 #include <utility>
 #include "Socket.h"
 #include "Channel.h"
+#include "SmartPointer.h"
 
 class EventLoop;
 class InetAddr;
@@ -54,8 +55,10 @@ private:
     void setNonBlocking(int cfd);
 
     EventLoop *m_loop;                      // 服务器对应的mainloop
-    std::unique_ptr<Socket> m_acceptSocket; // 服务器的socket
-    std::unique_ptr<Channel> m_acceptChannel; // 对应于上面socket fd的channel
+    // std::unique_ptr<Socket> m_acceptSocket; // 服务器的socket
+    // std::unique_ptr<Channel> m_acceptChannel; // 对应于上面socket fd的channel
+    std::unique_ptr<Socket, PoolDeleter<Socket>> m_acceptSocket; // 服务器的socket
+    std::unique_ptr<Channel, PoolDeleter<Channel>> m_acceptChannel; // 对应于上面socket fd的channel
     NewConnectionCallback m_connectionFunc; // 这个回调函数是mainloop中用于轮询分配subloop的函数 注意不是服务器对象的连接回调
     std::atomic_bool m_isListening;         // 是否仍在监听
 };

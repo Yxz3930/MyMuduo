@@ -10,8 +10,10 @@
 
 Acceptor::Acceptor(EventLoop *loop, InetAddr &listenAddr, bool reusePort)
     : m_loop(loop),
-      m_acceptSocket(new Socket(createNonBlockingFd())),        //  Socket(int sockfd) : m_fd(sockfd) {}
-      m_acceptChannel(new Channel(loop, m_acceptSocket->fd())), // Channel(EventLoop*, int fd);
+    //   m_acceptSocket(new Socket(createNonBlockingFd())),        //  Socket(int sockfd) : m_fd(sockfd) {}
+      m_acceptSocket(make_unique_from_pool<Socket>(createNonBlockingFd())),        //  Socket(int sockfd) : m_fd(sockfd) {}
+    //   m_acceptChannel(new Channel(loop, m_acceptSocket->fd())), // Channel(EventLoop*, int fd);
+      m_acceptChannel(make_unique_from_pool<Channel>(loop, m_acceptSocket->fd())), // Channel(EventLoop*, int fd);
       m_isListening(false)
 {
     this->m_acceptSocket->setReuseAddr(reusePort);
@@ -43,11 +45,11 @@ void Acceptor::listen()
 {
     this->m_isListening.store(true);
     this->m_acceptSocket->listen();
-    LOG_INFO("Acceptor listen fd register read event");
-    LOG_INFO("Acceptor channel ptr: " + ptrToString(this->m_acceptChannel.get()));
+    LOG_INFO << "Acceptor listen fd register read event";
+    LOG_INFO << "Acceptor channel ptr: " << ptrToString(this->m_acceptChannel.get());
     // 将设置回调的channel注册到epoll上
     this->m_acceptChannel->enableRead();
-    LOG_INFO("Acceptor::listen complete");
+    LOG_INFO << "Acceptor::listen complete";
 }
 
 void Acceptor::handleNewConnection()
@@ -69,15 +71,16 @@ void Acceptor::handleNewConnection()
         else
         {
             // 外部没有注册mainloop轮询分配方法
-            LOG_ERROR("the handle new connection assgin function is empty");
+            LOG_ERROR << "the handle new connection assgin function is empty";
             ::close(cfd);
         }
     }
     else
     {
-        LOG_ERROR("cfd < 0, Acceptor::handleNewConnection error");
+        LOG_ERROR << "cfd < 0, Acceptor::handleNewConnection error";
     }
 }
+
 
 int Acceptor::createNonBlockingFd()
 {

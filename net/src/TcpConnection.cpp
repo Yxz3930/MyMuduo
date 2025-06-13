@@ -3,13 +3,17 @@
 #include "Channel.h"
 #include "EventLoop.h"
 #include "Logger.h"
+
 #include <cstring>
 #include <unistd.h>
 #include <sys/sendfile.h>
 
 TcpConnection::TcpConnection(EventLoop *loop, const std::string &connName, int cfd, const InetAddr &serverAddr, const InetAddr &clientAddr)
-    : m_loop(loop), m_connName(connName), m_cfd(cfd), m_state(TcpConnection::Connecting),
-      m_socketCfd(new Socket(m_cfd)), m_channelCfd(new Channel(m_loop, m_cfd)), // 这俩智能指针不需要管理生命周期
+    : m_loop(loop), m_connName(connName), m_state(TcpConnection::Connecting),
+    //   m_socketCfd(new Socket(cfd)), 
+      m_socketCfd(make_unique_from_pool<Socket>(cfd)), 
+    //   m_channelCfd(new Channel(m_loop, cfd)), // 这俩智能指针不需要管理生命周期
+      m_channelCfd(make_unique_from_pool<Channel>(m_loop, cfd)), // 这俩智能指针不需要管理生命周期
       m_serverAddr(serverAddr), m_clientAddr(clientAddr)
 {
     /**
@@ -24,12 +28,12 @@ TcpConnection::TcpConnection(EventLoop *loop, const std::string &connName, int c
         std::bind(&TcpConnection::handleWrite, this));
     this->m_channelCfd->setCloseCallback(
         std::bind(&TcpConnection::handleClose, this));
-    // this->m_channelCfd->setErrorCallback(
-    //     std::bind(&TcpConnection::handleError, this));
+    this->m_channelCfd->setErrorCallback(
+        std::bind(&TcpConnection::handleError, this));
 
     this->m_socketCfd->setKeepAlive(true);
 
-    LOG_INFO("TcpConnection start connecting, fd " + std::to_string(this->m_cfd));
+    LOG_INFO << "TcpConnection start connecting, fd " << this->m_socketCfd->fd();
 }
 
 TcpConnection::~TcpConnection()
@@ -38,8 +42,22 @@ TcpConnection::~TcpConnection()
      * 没有需要关闭的文件描述符 智能指针也可以自己管理生命周期 所以析构函数中不需要进行什么操作
      * channel相关的操作会在对应位置进行调用 析构中没有进行remove
      */
-    LOG_INFO("TcpConnection disconnecting, fd " + std::to_string(this->m_cfd));
-    this->setState(TcpConnection::Disconnected);
+    LOG_INFO << "TcpConnection disconnecting, fd " << this->m_socketCfd->fd();
+    // 正常退出时，状态应该已经是 Disconnected
+    assert(this->m_state == TcpConnection::Disconnected);
+}
+
+void TcpConnection::setCallbacks()
+{
+    auto self = shared_from_this();
+    this->m_channelCfd->setReadCallback(
+        std::bind(&TcpConnection::handleRead, self, std::placeholders::_1));
+    this->m_channelCfd->setWriteCallback(
+        std::bind(&TcpConnection::handleWrite, self));
+    this->m_channelCfd->setCloseCallback(
+        std::bind(&TcpConnection::handleClose, self));
+    this->m_channelCfd->setErrorCallback(
+        std::bind(&TcpConnection::handleError, self));
 }
 
 void TcpConnection::send(const std::string &data)
@@ -49,11 +67,32 @@ void TcpConnection::send(const std::string &data)
         // 如果send是在自己loop的线程中跑的 那么可以直接进行发送了
         // 实际分析一下, 可以发现, else语句当中的runInLoop方法里面还进行了是否在自己线程的判断 所以这里可以不加if的语句的
         if (this->m_loop->isThisThread())
+        {
             this->sendInLoop(data.c_str(), data.size());
-
+        }
         else
             this->m_loop->runInLoop(
-                std::bind(&TcpConnection::sendInLoop, this, data.c_str(), data.size()));
+                std::bind(&TcpConnection::sendInLoop, shared_from_this(), data.c_str(), data.size()));
+    }
+}
+
+void TcpConnection::send(Buffer *buf)
+{
+    if (this->isConnected())
+    {
+        if (this->m_loop->isThisThread())
+        {
+            this->sendInLoop(buf->peek(), buf->readableBytes());
+        }
+        else
+        {
+            // 注意：跨线程传递Buffer指针是不安全的。正确的做法是传递string。
+            // 这里我们假设上层业务保证了生命周期，或转换为string传递。
+            // 为安全起见，这里也转换为string
+            std::string msg = buf->retrieveAllAsString();
+            this->m_loop->runInLoop(
+                std::bind(&TcpConnection::sendInLoop, shared_from_this(), msg.data(), msg.size()));
+        }
     }
 }
 
@@ -69,7 +108,7 @@ void TcpConnection::sendFile(int fileDescriptor, off_t offset, size_t count)
         }
         else
             this->m_loop->runInLoop(
-                std::bind(&TcpConnection::sendFileInLoop, this, fileDescriptor, offset, count));
+                std::bind(&TcpConnection::sendFileInLoop, shared_from_this(), fileDescriptor, offset, count));
     }
 }
 
@@ -82,7 +121,7 @@ void TcpConnection::shutdown()
 
         // 直接执行关闭函数或者插入到函数队列中等待执行
         this->m_loop->runInLoop(
-            std::bind(&TcpConnection::shutdownInLoop, this));
+            std::bind(&TcpConnection::shutdownInLoop, shared_from_this()));
     }
 }
 
@@ -102,7 +141,7 @@ void TcpConnection::connectionEstablished()
 
 void TcpConnection::connectionDestroyed()
 {
-    if(this->m_state == TcpConnection::Connected)
+    if (this->m_state == TcpConnection::Connected || this->m_state == TcpConnection::Disconnecting)
     {
         // 设置连接状态
         this->setState(TcpConnection::Disconnected);
@@ -117,31 +156,24 @@ void TcpConnection::connectionDestroyed()
 
 void TcpConnection::handleRead(TimeStamp recvTime)
 {
-    /**
-     * Channel在fd的接收缓冲区有数据是（读事件触发）所需要做的东西
-     * 这里没有采用readv接收方式 仍是原始的read方法 通过while循环一次性读取完所有数据
-     */
+    // 读取到类内的都缓冲区当中m_recvBuffer
+    int saveErrno = 0;
+    this->m_recvBuffer.readFd(this->m_socketCfd->fd(), &saveErrno);
 
-    this->m_recvBuffer.clear(); // 清空类内接收缓冲区的容器 方便接收
-    ssize_t readBytes = this->recvAllMessage(this->m_cfd, this->m_recvBuffer);
-
-    // 这里判断是否成功读取数据 然后分不同情况进行处理 成功读取数据则调用消息回调执行对应的方法
-    if (readBytes > 0)
+    if (this->m_recvBuffer.readableBytes() > 0)
     {
-        // 说明读取到数据了 应该进行消息回调
-        this->m_messageCallback(shared_from_this(), this->m_recvBuffer, recvTime);
+        if (this->m_messageCallback)
+            this->m_messageCallback(shared_from_this(), &this->m_recvBuffer, recvTime);
     }
-    else if (readBytes == 0)
+    else if (this->m_recvBuffer.readableBytes() == 0)
     {
-        // 对端关闭 应该调用关闭的函数
-        this->handleClose(); // 这个函数里面会调用处理关闭的回调
-        return;
+        this->handleClose();
     }
     else
     {
         // 出错了
-        LOG_ERROR("TcpConnection::handleRead readBytes < 0, error");
-
+        errno = saveErrno;
+        LOG_ERROR << "TcpConnection::handleRead readBytes < 0, error";
         // 调用处理错误的函数
         this->handleError();
     }
@@ -156,55 +188,60 @@ void TcpConnection::handleWrite()
      * 通过while+write的方式将数据发送给对端
      * 暂时先不处理
      */
-    if (this->m_channelCfd->isWriteEvent() && !this->m_sendBuffer.empty())
+
+    if (this->m_channelCfd->isWriteEvent())
     {
-        size_t writeLen = ::write(this->m_cfd, this->m_sendBuffer.data() + this->m_sendOffset, this->m_sendBuffer.size() - this->m_sendOffset);
+        size_t writeLen = ::write(this->m_socketCfd->fd(), this->m_sendBuffer.peek(), this->m_sendBuffer.readableBytes());
         if (writeLen > 0)
         {
-            this->m_sendOffset += writeLen;
-            if (this->m_sendOffset == this->m_sendBuffer.size()) // 发送缓冲区的数据写完了
+            this->m_sendBuffer.retrieve(writeLen);
+            if (this->m_sendBuffer.readableBytes() == 0)
             {
-                // 将缓冲区中的数据发送完 则将写事件触发关闭
                 this->m_channelCfd->disableWrite();
-
-                // 如果写完成回调不为空
                 if (this->m_writeCompleteCallback)
-                {
                     this->m_writeCompleteCallback(shared_from_this());
-                }
-
-                // 如果断开连接了 则关闭tcp连接
-                if (this->m_state == TcpConnection::Disconnected || this->m_state == TcpConnection::Disconnecting)
-                {
-                    this->shutdownInLoop();
-                }
             }
+
+            if (this->m_state == TcpConnection::Disconnected || this->m_state == TcpConnection::Disconnecting)
+            {
+                this->shutdown();
+            }
+        }
+        else
+        {
+            LOG_ERROR << "::write error";
         }
     }
     else
     {
-        LOG_ERROR("TcpConnection::handleWrite cannot write");
+        LOG_ERROR << "Connection fd = " << m_socketCfd->fd()
+                  << " is down, no more writing";
     }
 }
 
 void TcpConnection::handleClose()
 {
-    // 设置连接状态 删除所有触发事件
-    this->setState(TcpConnection::Disconnected);
+    if (this->m_state == TcpConnection::Connected || this->m_state == TcpConnection::Disconnecting)
+    {
+        // 设置连接状态 删除所有触发事件
+        this->setState(TcpConnection::Disconnected);
 
-    /**
-     * 这里需要先进行对channel disableAll，即使下面的m_closeCallback回调函数中再一次进行了disableAll
-     * 但是一旦检测出来一方断开连接 那么就需要将该连接对应的Channel的所有触发事件都从epoll上删除掉 否则可能会重复触发已经无效的Channel
-     */
-    this->m_channelCfd->disableAll(); // 因为后面的关闭回调会将这个channel从epoll上删除掉
+        /**
+         * 这里需要先进行对channel disableAll，即使下面的m_closeCallback回调函数中再一次进行了disableAll
+         * 但是一旦检测出来一方断开连接 那么就需要将该连接对应的Channel的所有触发事件都从epoll上删除掉 否则可能会重复触发已经无效的Channel
+         */
+        this->m_channelCfd->disableAll(); // 因为后面的关闭回调会将这个channel从epoll上删除掉
 
-    // 执行连接回调 因为连接回调本身也会在关闭的时候起作用
-    if(this->m_connectionCallback)  
-        this->m_connectionCallback(shared_from_this());
+        // 创建一个TcpConnection对象 确保连接不会被销毁
+        TcpConnectionPtr guardObj = shared_from_this();
+        // 执行连接回调 因为连接回调本身也会在关闭的时候起作用
+        if (this->m_connectionCallback)
+            this->m_connectionCallback(guardObj);
 
-    // 执行关闭回调 在mainloop中注册的关闭函数 将该连接从
-    if(this->m_closeCallback)
-        this->m_closeCallback(shared_from_this());
+        // 执行关闭回调 在mainloop中注册的关闭函数 将该连接从
+        if (this->m_closeCallback)
+            this->m_closeCallback(guardObj); // 将连接从mainloop中删除 将channel从对应的epoll上的map中删除
+    }
 }
 
 void TcpConnection::handleError()
@@ -212,7 +249,7 @@ void TcpConnection::handleError()
     int optval;
     socklen_t optlen = sizeof optval;
     int err = 0;
-    if (::getsockopt(this->m_cfd, SOL_SOCKET, SO_ERROR,
+    if (::getsockopt(this->m_socketCfd->fd(), SOL_SOCKET, SO_ERROR,
                      &optval, &optlen) < 0)
     {
         err = errno;
@@ -221,7 +258,7 @@ void TcpConnection::handleError()
     {
         err = optval;
     }
-    LOG_ERROR("TcpConnection::handleError name:" + this->m_connName + " - SO_ERROR: " + std::to_string(err));
+    LOG_ERROR << "TcpConnection::handleError name:" << this->m_connName << " - SO_ERROR: " << err;
 }
 
 void TcpConnection::sendInLoop(const void *data, size_t data_len)
@@ -229,67 +266,43 @@ void TcpConnection::sendInLoop(const void *data, size_t data_len)
     /**
      * 将数据发送出去，如果数据太大 那么就通过多次设置注册写事件 使得可以多次进行发送 直到将数据发送完成
      */
-
     // 第一次发送的时候应该是没有注册写事件的
     // 或者前一次已经发送完成 那么会调用disenbleWrite将写事件触发删除掉
     // 类内的m_sendBuffer只是用于存储没有发送完成的数据 并不是一开始数据就在这里了
-    if (! this->m_channelCfd->isWriteEvent() && this->m_sendBuffer.empty())
+
+    if (m_state == Disconnected)
     {
-        size_t writeLen = ::write(this->m_cfd, data, data_len);
+        LOG_WARNING << "disconnected, give up writing";
+        return;
+    }
 
-        if (writeLen >= 0)
+    bool faultError = 0;
+    ssize_t writeLen = 0;
+    size_t remainLen = data_len;
+
+    if (!this->m_channelCfd->isWriteEvent() && this->m_sendBuffer.readableBytes() == 0)
+    {
+        writeLen = ::write(this->m_socketCfd->fd(), data, data_len);
+        if(writeLen > 0)
         {
-            // ? 情况1：write 成功返回 >=0 发送成功
-
-            if (writeLen == data_len)
-            {
-                // 写完成回调
-                if (this->m_writeCompleteCallback)
-                    // this->m_writeCompleteCallback(shared_from_this()); // 直接执行
-                    this->m_loop->queueInLoop(
-                        std::bind(m_writeCompleteCallback, shared_from_this())); // 插入到队列中 等到有事件触发时执行
-            }
-            else if (writeLen < data_len)
-            {
-                // 没有发送完 将数据保留在类中(用户空间中) 注册写事件触发 等到发送缓冲区有空闲空间时再去发送
-                this->m_sendBuffer.append(static_cast<const char *>(data) + writeLen, data_len - writeLen);
-                this->m_sendOffset = 0;
-
-                // channel注册写事件触发 当发送缓冲区中存在空闲空间时就触发开始下一次发送
-                // 这里不需要添加queueInLoopp是因为handleWrite方法已经注册到了Channel上
-                if (!this->m_channelCfd->isWriteEvent())
-                    this->m_channelCfd->enableWrite();
-            }
+            remainLen -= writeLen;
+            if(remainLen == 0 && this->m_writeCompleteCallback)
+                this->m_loop->queueInLoop(std::bind(this->m_writeCompleteCallback, shared_from_this()));
         }
         else
         {
-            // // ? 情况2：write 失败，返回 -1  但是要分下面不同的情况
-            //
-            if (errno == EWOULDBLOCK || errno == EAGAIN)
-            {
-                // ?? 情况2.1：内核缓冲区满 -> 写不了 -> 注册写事件 等缓冲区空了再写
-                m_sendBuffer.append(static_cast<const char *>(data), data_len);
-                m_channelCfd->enableWrite();
-            }
-            else if (errno == EINTR)
-            {
-                // ?? 情况2.2：被信号中断 -> 可以选择重新尝试 write 但这里直接选择将数据移动到缓冲区中进行处理操作并注册写事件
-                m_sendBuffer.append(static_cast<const char *>(data), data_len);
-                m_channelCfd->enableWrite();
-            }
-            else
-            {
-                // ? 情况2.3：其他错误，比如 ECONNRESET、EPIPE -> 说明连接可能异常
-                LOG_ERROR("TcpConnection::sendInLoop write error: " + std::string(strerror(errno)));
+            if (errno != EWOULDBLOCK) {
+                LOG_ERROR << "TcpConnection::sendInLoop";
+                if (errno == EPIPE || errno == ECONNRESET) {
+                    faultError = true;
+                }
             }
         }
     }
-    else
+    if(! faultError && remainLen > 0)
     {
-        // 情况3：已经注册写事件或者缓冲区不为空 -> 无论如何先缓存数据，然后等待 write 事件驱动触发发送
-        m_sendBuffer.append(static_cast<const char *>(data), data_len);
-        if (!m_channelCfd->isWriteEvent())
-            m_channelCfd->enableWrite(); // 确保一定注册写事件以继续发送
+        this->m_sendBuffer.append(static_cast<const char*>(data) + writeLen, remainLen);
+        this->m_channelCfd->enableWrite();
     }
 }
 
@@ -305,14 +318,14 @@ void TcpConnection::sendFileInLoop(int fileDescriptor, off_t &offset, size_t cou
 
     if (this->m_state == TcpConnection::Disconnecting || this->m_state == TcpConnection::Disconnected)
     {
-        LOG_ERROR("tcp disconnect, TcpConnection::sendFileInLoop error");
+        LOG_ERROR << "tcp disconnect, TcpConnection::sendFileInLoop error";
         return;
     }
 
     // 如果没有注册写事件且缓冲区无数据 说明是第一次发送或者是前面的消息已经发送完成
-    if (!this->m_channelCfd->isWriteEvent() && this->m_sendBuffer.empty())
+    if (!this->m_channelCfd->isWriteEvent() && this->m_sendBuffer.writableBytes() == 0)
     {
-        size_t sendBytes = ::sendfile(this->m_cfd, fileDescriptor, &offset, remainBytes);
+        size_t sendBytes = ::sendfile(this->m_socketCfd->fd(), fileDescriptor, &offset, remainBytes);
         if (sendBytes >= 0)
         {
             // sendBytes >= 0 发送成功
@@ -320,11 +333,11 @@ void TcpConnection::sendFileInLoop(int fileDescriptor, off_t &offset, size_t cou
             if (remainBytes == 0)
             {
                 // 删除写事件触发
-                if(this->m_channelCfd->isWriteEvent())
+                if (this->m_channelCfd->isWriteEvent())
                     this->m_channelCfd->disableWrite();
 
                 // 添加写完成回调函数
-                if(this->m_writeCompleteCallback)
+                if (this->m_writeCompleteCallback)
                     this->m_loop->queueInLoop(
                         std::bind(this->m_writeCompleteCallback, shared_from_this()));
             }
@@ -345,22 +358,23 @@ void TcpConnection::sendFileInLoop(int fileDescriptor, off_t &offset, size_t cou
             else if (errno == EPIPE || errno == ECONNRESET)
             {
                 // 对端关闭了 处理关闭连接的操作
-                LOG_ERROR("TcpConnection::sendFileInLoop error: peer closed connection");
+                LOG_ERROR << "TcpConnection::sendFileInLoop error: peer closed connection";
                 this->handleClose();
                 return;
             }
             else
             {
-                LOG_ERROR("TcpConnection::sendFileInLoop errno");
+                LOG_ERROR << "TcpConnection::sendFileInLoop errno";
                 this->handleError();
             }
         }
     }
-    // 如果仍然没有发送完 则插入到任务队列中
+
+    // 如果仍然没有发送完 则插入到任务队列中 因为发送文件并没有将文件当中的数据插入到类内的发送缓冲区中 而是不断地间歇地发送文件内容
     if (remainBytes > 0)
     {
         this->m_loop->queueInLoop(
-            std::bind(&TcpConnection::sendFileInLoop, this, fileDescriptor, offset, remainBytes));
+            std::bind(&TcpConnection::sendFileInLoop, shared_from_this(), fileDescriptor, offset, remainBytes));
     }
 }
 
@@ -371,14 +385,11 @@ void TcpConnection::shutdownInLoop()
     {
         this->m_socketCfd->shutdownWrite();
     }
-    else // 如果仍然有数据 那么就先将这个函数插入到函数队列当中 直到关闭完成
-        this->m_loop->queueInLoop(
-            std::bind(&TcpConnection::shutdownInLoop, this));
 }
 
 ssize_t TcpConnection::recvAllMessage(int cfd, std::string &message)
 {
-    char buf[64];
+    char buf[1024];
     ::memset(buf, 0, sizeof(buf));
     ssize_t totalBytes = 0; // 记录总长度 也就是总的字节数
 
@@ -413,3 +424,4 @@ ssize_t TcpConnection::recvAllMessage(int cfd, std::string &message)
 
     return totalBytes;
 }
+

@@ -19,13 +19,13 @@ bool Timer::isRepeat() const
 
 TimeStamp Timer::ResetExpiration(const TimeStamp &now)
 {
-    if(this->m_repeat)
+    if (this->m_repeat)
     {
         this->m_expiration = TimeStamp(now.GetTimePoint() + std::chrono::milliseconds(this->m_interval_millisecond));
     }
     else
-        LOG_ERROR("the timer is not periodical timer");
-        
+        LOG_ERROR << "the timer is not periodical timer";
+
     return this->m_expiration;
 }
 
@@ -37,8 +37,7 @@ std::function<void()> Timer::GetCallback()
 void Timer::UpdateTimeStamp(const TimeStamp &ts)
 {
     this->m_expiration = ts;
-    LOG_DEBUG(std::string("next expiration timestamp is: " + this->m_expiration.toFormatString() + 
-                        ", duration<miroseconds>: " + std::to_string(this->m_expiration.toMilliseconds())));
+    LOG_DEBUG << "next expiration timestamp is: " << this->m_expiration.toFormatString() << ", duration<miroseconds>: " << this->m_expiration.toMilliseconds();
 }
 
 void Timer::ResetCallBack(const std::function<void(void)> &_cb)

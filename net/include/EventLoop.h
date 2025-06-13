@@ -8,6 +8,7 @@
 #include <thread>
 #include <functional>
 #include "TimeStamp.h"
+#include "SmartPointer.h"
 
 
 class Channel;
@@ -59,6 +60,10 @@ public:
     /// @return
     bool isThisThread();
 
+    /// @brief 获取map的大小
+    /// @return 
+    size_t getMapSize();
+
 private:
 
     /// @brief 创建eventfd
@@ -81,7 +86,8 @@ private:
 
     std::thread::id m_threadId; // 用于记录当前线程id
 
-    std::unique_ptr<Poller> m_pollerPtr; // 保存对应的Poller抽象类对象 实际上是EpollPoller
+    // std::unique_ptr<Poller> m_pollerPtr; // 保存对应的Poller抽象类对象 实际上是EpollPoller
+    std::unique_ptr<Poller, PoolDeleter<Poller>> m_pollerPtr; // 保存对应的Poller抽象类对象 实际上是EpollPoller
 
     /**
      * EventLoop在各自线程中运行 但是不同线程之间需要进行通知 这就需要eventfd
@@ -90,7 +96,8 @@ private:
      * 也可以是一个unique_ptr<Socket>和一个unique_ptr<Channel>
      */
     int m_wakeupFd;                           // eventfd 用于新连接之后通过eventfd来唤醒一个subloop 也需要注册到epoll上
-    std::unique_ptr<Channel> m_wakeupChannel; // 用于eventfd对应的事件处理通道
+    // std::unique_ptr<Channel> m_wakeupChannel; // 用于eventfd对应的事件处理通道
+    std::unique_ptr<Channel, PoolDeleter<Channel>> m_wakeupChannel; // 用于eventfd对应的事件处理通道
 
     ChannelVector m_activeChannel; // 存储触发事件的Channel* 用于执行回调
 

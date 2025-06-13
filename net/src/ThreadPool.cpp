@@ -48,7 +48,7 @@ void ThreadPool::start(EventLoopPtrVector &loopVec)
     this->m_running.store(true);
     this->m_workerContext.resize(this->m_threadNums);
 
-    LOG_INFO("subloop nums: " + std::to_string(this->m_threadNums));
+    LOG_INFO << "subloop nums: " << this->m_threadNums;
 
     for (int i = 0; i < this->m_threadNums; ++i)
     {
@@ -58,8 +58,8 @@ void ThreadPool::start(EventLoopPtrVector &loopVec)
 
             // m_workerContext…Ë÷√
             EventLoop* subloop = new EventLoop();
-            LOG_INFO("worker thread id: " + std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id())));
-            LOG_INFO("subloop ptr: " + ptrToString(subloop) + "\n");
+            LOG_INFO << "worker thread id: " << std::hash<std::thread::id>{}(std::this_thread::get_id());
+            LOG_INFO << "subloop ptr: " << ptrToString(subloop) << "\n";
             this->m_workerContext[i].loop = subloop;
             this->m_workerContext[i].task = std::bind(&EventLoop::loop, subloop);
 

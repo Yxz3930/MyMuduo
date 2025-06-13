@@ -1,8 +1,8 @@
+file(GLOB SOURCES *.cpp)
 
 add_library(LoggerLib 
     STATIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/Logger.cpp    
-    ${CMAKE_CURRENT_SOURCE_DIR}/AsyncLogger.cpp    
+    ${SOURCES}  
 )
 
 target_include_directories(LoggerLib 
@@ -13,4 +13,5 @@ target_include_directories(LoggerLib
     ${CMAKE_SOURCE_DIR}/timer
 )
 
-target_link_libraries(LoggerLib PRIVATE TimerLib)
+find_package(fmt REQUIRED)
+target_link_libraries(LoggerLib PRIVATE TimerLib fmt::fmt)

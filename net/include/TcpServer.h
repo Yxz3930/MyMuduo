@@ -8,6 +8,8 @@
 #include <thread>
 #include "Callbacks.h"
 #include "InetAddress.h"
+#include "Buffer.h"
+#include "SmartPointer.h"
 
 class EventLoop;
 class Acceptor;
@@ -66,6 +68,8 @@ private:
     /// @return 返回下一个loop的索引
     size_t nextLoopIndex();
 
+    void handleClose(const TcpConnectionPtr &conn);
+
     /// @brief 关闭tcp连接的操作
     void handleCloseConnection(const TcpConnectionPtr &conn);
 
@@ -75,9 +79,11 @@ private:
     std::string m_serverPort;
     InetAddr m_serverAddr;
 
-    std::unique_ptr<Acceptor> m_serverAcceptor; // 运行在mainloop中 进行新客户端的连接监听
+    // std::unique_ptr<Acceptor> m_serverAcceptor; // 运行在mainloop中 进行新客户端的连接监听
+    std::unique_ptr<Acceptor, PoolDeleter<Acceptor>> m_serverAcceptor; // 运行在mainloop中 进行新客户端的连接监听
     EventLoopPtrVector m_subLoopVec;            // 存储subLoop
-    std::unique_ptr<ThreadPool> m_threadPool;   // 内存池 里面的每个线程运行着subloop的loop事件循环
+    // std::unique_ptr<ThreadPool> m_threadPool;   // 内存池 里面的每个线程运行着subloop的loop事件循环
+    std::unique_ptr<ThreadPool, PoolDeleter<ThreadPool>> m_threadPool;   // 内存池 里面的每个线程运行着subloop的loop事件循环
     int m_threadNums;                           // 线程数量
 
     std::atomic_size_t m_nextSubLoopIdx{0}; // 下一个subloop的索引 从 m_subLoopVec 中取即可
@@ -92,3 +98,4 @@ private:
 };
 
 #endif // TCP_SERVER_H
+

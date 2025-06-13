@@ -3,6 +3,7 @@
 #include "myutils.h"
 #include "Poller.h"
 #include "Logger.h"
+#include "EpollPoller.h"
 
 #include <vector>
 #include <thread>
@@ -17,19 +18,20 @@ __thread EventLoop* thisThread = nullptr;
 EventLoop::EventLoop(std::thread::id thread_id)
     : m_looping(false), m_quit(false),
       m_threadId(thread_id),
-      m_pollerPtr(Poller::newPoller(this)),
+      m_pollerPtr(Poller::newPoller(this)), // 这是使用自己的智能指针替代太麻烦了
       m_wakeupFd(createEventFd()),
-      m_wakeupChannel(new Channel(this, m_wakeupFd))
+    //   m_wakeupChannel(new Channel(this, m_wakeupFd)),
+      m_wakeupChannel(make_unique_from_pool<Channel>(this, m_wakeupFd))
 {
     // 确保一个线程只有一个EventLoop 
-    LOG_INFO("EventLoop::EventLoop EventLoop threadId: " + std::to_string(std::hash<std::thread::id>{}(this->m_threadId)));
-    LOG_INFO("EventLoop::EventLoop m_pollerPtr ptr: " + ptrToString(this->m_pollerPtr.get()));
+    LOG_INFO << "EventLoop::EventLoop EventLoop threadId: " << std::to_string(std::hash<std::thread::id>{}(this->m_threadId));
+    LOG_INFO << "EventLoop::EventLoop m_pollerPtr ptr: " << ptrToString(this->m_pollerPtr.get());
 
     // 设置eventfd的回调和注册 先注册回调 然后再往epoll上注册
     this->m_wakeupChannel->setReadCallback(
         std::bind(&EventLoop::handleEventFd, this)
     );
-    LOG_INFO("loop eventfd register read event");
+    LOG_INFO << "loop eventfd register read event";
     this->m_wakeupChannel->enableRead(); // 注册到epoll上 因为只是用于通知 所以只需要关注read即可
 }
 
@@ -40,7 +42,11 @@ EventLoop::~EventLoop()
      */
     this->m_wakeupChannel->disableAll();
     this->m_wakeupChannel->remove();
-    ::close(this->m_wakeupFd);
+    // 关闭 eventfd
+    if (this->m_wakeupFd >= 0) { // 良好的习惯，确保fd有效
+        ::close(this->m_wakeupFd);
+        this->m_wakeupFd = -1; // 避免双重关闭
+    }
     thisThread = nullptr;
 }
 
@@ -49,7 +55,7 @@ void EventLoop::loop()
     this->m_looping.store(true);
     this->m_quit.store(false);
     size_t tid = std::hash<std::thread::id>{}(this->m_threadId);
-    LOG_INFO(std::string("thread " + std::to_string(tid) + " start loop..." ));
+    LOG_INFO << "thread " << tid << " start loop..." ;
     
     /**
      * EventLoop进行事件循环 但是事件触发之后是通过Channel来执行各自的任务的
@@ -69,7 +75,7 @@ void EventLoop::loop()
         this->doPendingFuntor();
 
     }
-    LOG_INFO(std::string("thread " + std::to_string(tid) + " stop loop..." ));
+    LOG_INFO << "thread " << tid << " stop loop..." ;
     this->m_looping.store(false);
 }
 
@@ -149,6 +155,11 @@ void EventLoop::hasChannle(Channel *channel)
 bool EventLoop::isThisThread()
 {
     return this->m_threadId == std::this_thread::get_id();
+}
+
+size_t EventLoop::getMapSize()
+{
+    return this->m_pollerPtr->getMapSize();
 }
 
 int EventLoop::createEventFd()

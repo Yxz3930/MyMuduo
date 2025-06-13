@@ -4,7 +4,7 @@
 void ErrorIf(bool condition, const char *msg)
 {
     if(condition)
-        LOG_ERROR(msg);
+        LOG_ERROR << msg;
     else
         return;
 }

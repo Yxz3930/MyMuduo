@@ -11,6 +11,8 @@
 #include "Callbacks.h"
 #include "TcpConnection.h"
 #include "Socket.h"
+#include "SmartPointer.h"
+
 #include <string>
 
 class TcpClientNonLoop
@@ -46,7 +48,7 @@ private:
     const InetAddr m_serverAddr;
     const std::string m_clientName;
 
-    std::unique_ptr<Socket> m_clientSocket;
+    std::unique_ptr<Socket, PoolDeleter<Socket>> m_clientSocket;
     TcpConnectionPtr m_connPtr;
 };
 

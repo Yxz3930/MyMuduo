@@ -23,20 +23,39 @@ Channel::~Channel()
 
 void Channel::handlEvent(TimeStamp receiveTime)
 {
-    if(this->m_tied)
+    std::shared_ptr<void> guard;
+    if (this->m_tied)
     {
-        // 将weak_ptr提升为shared_ptr 
-        // 这里是检测这个Channel对应的TcpConnection是否还存在 如果存在才会执行回调
-        std::shared_ptr<void> guard = this->m_tie.lock();
-        if(guard)
+        // 处理绑定的通信连接的描述符
+        guard = this->m_tie.lock();
+        if (guard)
         {
             this->handleEventWithGuard(receiveTime);
+        }
+        else
+        {
+            // debug输出：对象已经销毁，跳过事件
+            LOG_WARNING << "[Channel] tied but TcpConnection expired";
         }
     }
     else
     {
+        // 处理没有绑定的文件描述符 也就是eventfd等这些不需要绑定的文件描述符
         handleEventWithGuard(receiveTime);
     }
+
+    // std::shared_ptr<void> guard;
+    // // 尝试从 weak_ptr 提升为 shared_ptr
+    // guard = this->m_tie.lock(); // 即使 m_tied 为 false，也可以尝试 lock()，结果就是 nullptr
+    // if (guard || !m_tied)       // 如果有 guard 保护，或者没有绑定（即非 TcpConnection 类的 Channel，如 timerfd）
+    // {
+    //     this->handleEventWithGuard(receiveTime);
+    // }
+    // else
+    // {
+    //     // 如果 m_tied 为 true 但 guard 为空，说明 TcpConnection 已经销毁
+    //     LOG_WARNING << "[Channel] tied but TcpConnection expired, skipping event for fd " << m_fd;
+    // }
 }
 
 void Channel::enableRead()
@@ -76,14 +95,13 @@ bool Channel::isNoneEvent()
 
 bool Channel::isReadEvent()
 {
-    return this->m_events == Channel::m_ReadEvent;
+    return this->m_events & Channel::m_ReadEvent;
 }
 
 bool Channel::isWriteEvent()
 {
-    return this->m_events == Channel::m_WriteEvent;
+    return this->m_events & Channel::m_WriteEvent;
 }
-
 
 void Channel::tie(const std::shared_ptr<void> &ptr)
 {
@@ -95,6 +113,7 @@ void Channel::tie(const std::shared_ptr<void> &ptr)
      */
     this->m_tie = ptr;
     this->m_tied = true;
+    LOG_INFO << "Channel::tie complete, TcpConnection ptr: " << ptr.get();
 }
 
 void Channel::remove()
@@ -117,38 +136,50 @@ void Channel::updateEvents()
     this->m_loop->updateChannel(this);
 }
 
+
 void Channel::handleEventWithGuard(TimeStamp receiveTime)
 {
-    LOG_INFO("Channel::handleEventWithGuard start handle event");
-    // 使用的是m_realEvent从epoll_wait中获取得到的事件类型 根据该事件类型来进行事件处理
+    LOG_INFO << "Channel::handleEventWithGuard start handle event, realEvents: " << m_realEvents;
 
-    // 关闭事件
-    if(this->m_realEvents & Channel::m_CloseEvent)
-    {
-        if(this->m_closeCallback)
-            this->m_closeCallback();
+    // 优先处理挂断或错误事件
+    if (m_realEvents & (EPOLLHUP | EPOLLERR))
+    { // 合并 EPOLLHUP 和 EPOLLERR 检查
+        if (m_realEvents & EPOLLHUP)
+        { // 对方关闭连接，可能同时有读事件
+            if (m_closeCallback)
+            {
+                m_closeCallback();
+            }
+        }
+        if (m_realEvents & EPOLLERR)
+        { // 错误事件
+            if (m_errorCallback)
+            {
+                m_errorCallback();
+            }
+        }
+        // 如果只有 EPOLLHUP/EPOLLERR，则在此返回，不继续处理读写
+        if (!(m_realEvents & (EPOLLIN | EPOLLOUT | EPOLLPRI | EPOLLRDHUP)))
+        {
+            return;
+        }
     }
 
-    // 错误事件
-    if(this->m_realEvents & Channel::m_ErrorEvent)
+    // 读事件：包括普通数据、紧急数据和对端关闭读端
+    if (m_realEvents & (EPOLLIN | EPOLLPRI | EPOLLRDHUP))
     {
-        if(this->m_errorCallback)
-            this->m_errorCallback();
-    }
-
-    // 读事件
-    if(this->m_realEvents & Channel::m_ReadEvent)
-    {
-        if(this->m_readCallback)
-            this->m_readCallback(receiveTime);
+        if (m_readCallback)
+        {
+            m_readCallback(receiveTime);
+        }
     }
 
     // 写事件
-    if(this->m_realEvents & Channel::m_WriteEvent)
+    if (m_realEvents & EPOLLOUT)
     {
-        if(this->m_writeCallback)
-            this->m_writeCallback();
+        if (m_writeCallback)
+        {
+            m_writeCallback();
+        }
     }
-
 }
-
